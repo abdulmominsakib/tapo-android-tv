@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.png" width="320" alt="Topo TV">
+  <img src="docs/banner.png" width="480" alt="Topo TV">
 </p>
 
 <h1 align="center">Topo TV</h1>
@@ -280,6 +280,6 @@ Flutter UI.
 ## Credits and licence
 
 Topo TV is based on [Topo](https://github.com/filirnd/topo) by filirnd,
-including its Tapo cloud research and the Topo logo, and is released under the
-[MIT License](LICENSE). Tapo and TP-Link are trademarks of TP-Link; this
+including its Tapo cloud research, and is released under the
+[MIT License](LICENSE). The Topo TV mouse logo was made for this port. Tapo and TP-Link are trademarks of TP-Link; this
 project is not endorsed by or affiliated with them.
