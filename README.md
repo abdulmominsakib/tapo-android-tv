@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/streaming-Tapo%20Cloud-E1F5FF?style=flat-square&labelColor=005A99" alt="Tapo Cloud">
   <img src="https://img.shields.io/badge/status-experimental-EDEEEE?style=flat-square&labelColor=595757" alt="Experimental">
   <img src="https://img.shields.io/badge/license-MIT-147D52?style=flat-square" alt="MIT">
+  <a href="https://github.com/abdulmominsakib/tapo-android-tv/releases/latest"><img src="https://img.shields.io/github/v/release/abdulmominsakib/tapo-android-tv?style=flat-square&color=0067AD" alt="Latest release"></a>
 </p>
 
 <p align="center">
@@ -118,7 +119,9 @@ can do everything with the on-screen buttons.
 
 ## Install
 
-1. Build `app-release.apk` as described in [Build from source](#build-from-source).
+1. Download the latest `topo-tv-*.apk` from
+   [Releases](https://github.com/abdulmominsakib/tapo-android-tv/releases/latest)
+   (or build it yourself, see [Build from source](#build-from-source)).
 2. Install it on the TV, from a USB drive with a file manager, or over the
    network with adb:
 
