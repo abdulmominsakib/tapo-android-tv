@@ -281,5 +281,5 @@ Flutter UI.
 
 Topo TV is based on [Topo](https://github.com/filirnd/topo) by filirnd,
 including its Tapo cloud research, and is released under the
-[MIT License](LICENSE). The Topo TV mouse logo was made for this port. Tapo and TP-Link are trademarks of TP-Link; this
+[MIT License](LICENSE). The Topo TV logo (a TV screen with a camera lens) was made for this port. Tapo and TP-Link are trademarks of TP-Link; this
 project is not endorsed by or affiliated with them.
