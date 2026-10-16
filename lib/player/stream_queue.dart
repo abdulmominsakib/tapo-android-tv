@@ -8,14 +8,16 @@ import 'package:flutter/services.dart';
 ///
 /// Opening several cloud relays and decoders at once makes slower TVs stutter,
 /// so each stream waits for a slot; the slot is handed on when the stream
-/// shows its first frame, fails, goes away, or after [slotTimeout].
+/// shows its first frame, fails, goes away, or after [slotTimeout]. A slow
+/// camera then keeps connecting alongside the others instead of blocking
+/// them.
 class StreamQueue {
   StreamQueue._();
   static final instance = StreamQueue._();
 
   /// How many streams may be connecting at the same moment.
   static const maxStarting = 1;
-  static const slotTimeout = Duration(seconds: 12);
+  static const slotTimeout = Duration(seconds: 5);
 
   final _waiting = <StreamTicket>[];
   final _starting = <StreamTicket>{};

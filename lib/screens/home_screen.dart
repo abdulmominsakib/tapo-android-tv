@@ -400,7 +400,7 @@ class _Empty extends StatelessWidget {
   }
   return switch (live) {
     LiveState.playing => ('Live', Icons.circle, TopoColors.success),
-    LiveState.failed => ('Unavailable', Icons.error_outline_rounded, TopoColors.error),
+    LiveState.failed => ('Not responding', Icons.error_outline_rounded, TopoColors.error),
     LiveState.retrying => ('Reconnecting', Icons.sync_rounded, TopoColors.muted),
     _ => ('Connecting', Icons.sync_rounded, TopoColors.muted),
   };
@@ -442,7 +442,14 @@ class _CameraCardState extends State<_CameraCard> {
       button: true,
       label: '${widget.number}. ${camera.name}, $status',
       child: TvCard(
-        onSelect: widget.onSelect,
+        onSelect: () {
+          final video = widget.videoKey.currentState;
+          if (video != null && video.failed) {
+            video.retry();
+          } else {
+            widget.onSelect();
+          }
+        },
         onLongSelect: widget.onLongSelect,
         padding: const EdgeInsets.all(TopoSpace.md),
         child: (focused) => Column(

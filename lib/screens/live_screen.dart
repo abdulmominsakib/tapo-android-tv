@@ -169,6 +169,16 @@ class _LiveScreenState extends State<LiveScreen> {
     if (pending != null && mounted) await _move(pending.$1, pending.$2);
   }
 
+  /// A new key recreates the player and its relay.
+  void _reconnect() {
+    final camera = _camera;
+    setState(() {
+      _reconnects++;
+      _liveState = LiveState.connecting;
+    });
+    if (camera != null) _app.refreshCameraState(camera, force: true);
+  }
+
   Future<void> _togglePrivacy() async {
     final camera = _camera;
     if (camera == null || _privacyBusy) return;
@@ -214,7 +224,15 @@ class _LiveScreenState extends State<LiveScreen> {
     final canPtz = camera?.ptz == true && camera?.privacy != true;
     final step = _app.ptzStep;
     if (selectKeys.contains(key)) {
-      if (isDown) camera?.privacy == true ? _togglePrivacy() : _showHud();
+      if (isDown) {
+        if (camera?.privacy == true) {
+          _togglePrivacy();
+        } else if (_liveState == LiveState.failed) {
+          _reconnect();
+        } else {
+          _showHud();
+        }
+      }
       return KeyEventResult.handled;
     }
     final dir = switch (key) {
@@ -317,14 +335,7 @@ class _LiveScreenState extends State<LiveScreen> {
                           const steps = [5, 10, 20];
                           app.setPtzStep(steps[(steps.indexOf(app.ptzStep) + 1) % steps.length]);
                         },
-                        onReconnect: () {
-                          // A new key recreates the player and its relay.
-                          setState(() {
-                            _reconnects++;
-                            _liveState = LiveState.connecting;
-                          });
-                          app.refreshCameraState(camera, force: true);
-                        },
+                        onReconnect: _reconnect,
                         onGuide: () => showRemoteGuide(context, section: GuideSection.live),
                         onHide: _hideHud,
                       ),

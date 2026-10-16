@@ -677,6 +677,7 @@ class _GridTile extends StatefulWidget {
 
 class _GridTileState extends State<_GridTile> {
   LiveState? _live;
+  final _video = GlobalKey<LiveVideoState>();
 
   @override
   Widget build(BuildContext context) {
@@ -690,7 +691,14 @@ class _GridTileState extends State<_GridTile> {
       child: TvFocusable(
         focusNode: widget.focusNode,
         ensureVisible: false,
-        onSelect: widget.onSelect,
+        onSelect: () {
+          final video = _video.currentState;
+          if (video != null && video.failed) {
+            video.retry();
+          } else {
+            widget.onSelect();
+          }
+        },
         onLongSelect: widget.onLongSelect,
         builder: (context, focused) => FocusRing(
           focused: focused,
@@ -728,6 +736,7 @@ class _GridTileState extends State<_GridTile> {
                   )
                 else if (widget.active)
                   LiveVideo(
+                    key: _video,
                     app: widget.app,
                     camera: camera,
                     compact: true,

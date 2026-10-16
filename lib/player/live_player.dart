@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
 import '../ui/theme.dart';
+import '../ui/tv.dart' show KeyCap;
 import 'stream_queue.dart';
 
 enum LiveState { connecting, playing, retrying, failed }
@@ -104,7 +105,16 @@ class LiveVideoState extends State<LiveVideo> {
   /// True while waiting for this stream's turn in the [StreamQueue].
   bool _waiting = false;
 
+  /// A camera that shows no picture this long after its first connection
+  /// attempt (retries included) is given up on until the user retries.
+  static const giveUpAfter = Duration(seconds: 25);
+  DateTime? _firstAttemptAt;
+
   LiveState get state => _state;
+  bool get failed => _state == LiveState.failed;
+
+  /// Manual retry: skips the queue, since the user asked for this camera.
+  void retry() => restart(skipQueue: true);
 
   @override
   void initState() {
@@ -128,10 +138,10 @@ class LiveVideoState extends State<LiveVideo> {
     widget.onStateChanged?.call(s);
   }
 
-  Future<void> _start() async {
+  Future<void> _start({bool skipQueue = false}) async {
     _stallTimer?.cancel();
     _releaseTicket();
-    if (widget.queued) {
+    if (widget.queued && !skipQueue) {
       final ticket = _ticket = StreamQueue.instance.request();
       // initState sets _waiting itself; setState is only for restarts.
       if (!_waiting) setState(() => _waiting = true);
@@ -143,11 +153,13 @@ class LiveVideoState extends State<LiveVideo> {
       }
       setState(() => _waiting = false);
     }
-    // If no frame arrives in time the relay is half-open; start over.
-    _stallTimer = Timer(const Duration(seconds: 35), () {
-      if (_state != LiveState.playing) _onFailure('The camera did not send video in time');
+    if (_disposed) return;
+    final started = _firstAttemptAt ??= DateTime.now();
+    final left = giveUpAfter - DateTime.now().difference(started);
+    _stallTimer = Timer(left.isNegative ? Duration.zero : left, () {
+      if (_state != LiveState.playing) _giveUp("The camera didn't respond in time");
     });
-    if (!_disposed) setState(() => _session = ++_sessions);
+    setState(() => _session = ++_sessions);
   }
 
   void _releaseTicket() {
@@ -161,6 +173,7 @@ class LiveVideoState extends State<LiveVideo> {
       case 'firstFrame':
         _releaseTicket();
         _failures = 0;
+        _firstAttemptAt = null;
         _stallTimer?.cancel();
         _setState(LiveState.playing);
       case 'size':
@@ -180,13 +193,15 @@ class LiveVideoState extends State<LiveVideo> {
     _releaseTicket();
     _releaseTexture();
     _failures++;
-    if (_failures > 3) {
-      _setState(LiveState.failed, error: message);
+    final backoff = Duration(seconds: 2 * _failures);
+    final started = _firstAttemptAt ?? DateTime.now();
+    if (_failures > 3 || DateTime.now().difference(started) + backoff >= giveUpAfter) {
+      _giveUp(message);
       return;
     }
     _setState(LiveState.retrying, error: message);
     _retryTimer?.cancel();
-    _retryTimer = Timer(Duration(seconds: 2 * _failures), () {
+    _retryTimer = Timer(backoff, () {
       if (!_disposed) {
         _setState(LiveState.connecting);
         _start();
@@ -194,17 +209,30 @@ class LiveVideoState extends State<LiveVideo> {
     });
   }
 
+  /// Stops trying; the overlay offers a Retry button.
+  void _giveUp(String message) {
+    _stallTimer?.cancel();
+    _retryTimer?.cancel();
+    _releaseTicket();
+    _releaseTexture();
+    _setState(LiveState.failed, error: message);
+  }
+
   void _releaseTexture() {
     if (_session != null && mounted) setState(() => _session = null);
   }
 
   /// Reconnect from scratch (e.g. after privacy mode is turned off).
-  void restart({bool resetFailures = true}) {
+  void restart({bool resetFailures = true, bool skipQueue = false}) {
     _retryTimer?.cancel();
+    _stallTimer?.cancel();
     _releaseTexture();
-    if (resetFailures) _failures = 0;
+    if (resetFailures) {
+      _failures = 0;
+      _firstAttemptAt = null;
+    }
     _setState(LiveState.connecting);
-    _start();
+    _start(skipQueue: skipQueue);
   }
 
   @override
@@ -249,7 +277,7 @@ class LiveVideoState extends State<LiveVideo> {
       _ when _waiting => compact ? 'Waiting' : 'Waiting for other cameras to load…',
       LiveState.connecting => compact ? 'Connecting' : 'Connecting to camera through Tapo cloud…',
       LiveState.retrying => 'Reconnecting…',
-      LiveState.failed => compact ? 'Unavailable' : 'Could not load the live view',
+      LiveState.failed => compact ? 'Not responding' : "The camera didn't respond",
       LiveState.playing => '',
     };
     const soft = Color(0xFFC9D3DC);
@@ -270,7 +298,33 @@ class LiveVideoState extends State<LiveVideo> {
           textAlign: TextAlign.center,
           style: TextStyle(color: TopoColors.onMedia, fontSize: compact ? 16 : 22, fontWeight: FontWeight.w600),
         ),
-        if (!compact && _error != null && _state != LiveState.connecting) ...[
+        if (failed) ...[
+          SizedBox(height: compact ? 10 : 18),
+          // OK on the card or screen triggers this; it's also clickable.
+          GestureDetector(
+            onTap: retry,
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 20, vertical: compact ? 6 : 10),
+              decoration: BoxDecoration(
+                color: TopoColors.primaryAction,
+                borderRadius: BorderRadius.circular(TopoRadius.full),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const KeyCap('OK', onMedia: true),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Retry',
+                    style: TextStyle(color: TopoColors.onMedia, fontSize: compact ? 15 : 18, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+        if (!compact && !failed && _error != null && _state != LiveState.connecting) ...[
           const SizedBox(height: 8),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
@@ -297,7 +351,7 @@ class LiveVideoState extends State<LiveVideo> {
             fallback: const SizedBox.expand(),
           ),
         ),
-        if (compact && taken != null)
+        if (compact && taken != null && !failed)
           // The last frame stays clear; a small chip says what's happening.
           Positioned(
             top: 8,
@@ -311,17 +365,14 @@ class LiveVideoState extends State<LiveVideo> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (failed)
-                    const Icon(Icons.videocam_off_rounded, size: 14, color: soft)
-                  else
-                    const SizedBox(
+                  const SizedBox(
                       width: 12,
                       height: 12,
                       child: CircularProgressIndicator(strokeWidth: 2, color: TopoColors.onMedia),
                     ),
                   const SizedBox(width: 6),
                   Text(
-                    failed ? 'Unavailable · $taken' : text,
+                    text,
                     style: const TextStyle(color: TopoColors.onMedia, fontSize: 13, fontWeight: FontWeight.w500),
                   ),
                 ],
@@ -345,8 +396,10 @@ class LiveVideoState extends State<LiveVideo> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         status,
-                        const SizedBox(height: 8),
-                        Text('Showing the last picture from $taken', style: const TextStyle(color: soft, fontSize: 15)),
+                        if (!compact) ...[
+                          const SizedBox(height: 8),
+                          Text('Showing the last picture from $taken', style: const TextStyle(color: soft, fontSize: 15)),
+                        ],
                       ],
                     ),
                   ),
