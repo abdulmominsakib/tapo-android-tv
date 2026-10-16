@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
 import '../ui/theme.dart';
+import 'stream_queue.dart';
 
 enum LiveState { connecting, playing, retrying, failed }
 
@@ -25,8 +26,9 @@ class _PlayerEvents {
 /// The native ExoPlayer view, embedded with hybrid composition. One view is
 /// one stream session: a new key means a new connection.
 class _NativeVideo extends StatelessWidget {
-  const _NativeVideo({super.key, required this.url, required this.onEvent});
+  const _NativeVideo({super.key, required this.url, required this.snapshotPath, required this.onEvent});
   final String url;
+  final String? snapshotPath;
   final void Function(Map<String, dynamic>) onEvent;
 
   static const _viewType = 'topo/live-video';
@@ -48,7 +50,7 @@ class _NativeVideo extends StatelessWidget {
             id: params.id,
             viewType: _viewType,
             layoutDirection: TextDirection.ltr,
-            creationParams: {'url': url},
+            creationParams: {'url': url, 'snapshot': snapshotPath},
             creationParamsCodec: const StandardMessageCodec(),
           )
             ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
@@ -67,6 +69,7 @@ class LiveVideo extends StatefulWidget {
     required this.app,
     required this.camera,
     this.compact = false,
+    this.queued = true,
     this.onStateChanged,
   });
 
@@ -75,6 +78,10 @@ class LiveVideo extends StatefulWidget {
 
   /// Compact = grid thumbnail: smaller texts, no long error explanations.
   final bool compact;
+
+  /// Wait for a [StreamQueue] slot before connecting (lists and grids).
+  /// The full-screen live view starts at once.
+  final bool queued;
   final ValueChanged<LiveState>? onStateChanged;
 
   @override
@@ -92,12 +99,17 @@ class LiveVideoState extends State<LiveVideo> {
   Timer? _retryTimer;
   Timer? _stallTimer;
   bool _disposed = false;
+  StreamTicket? _ticket;
+
+  /// True while waiting for this stream's turn in the [StreamQueue].
+  bool _waiting = false;
 
   LiveState get state => _state;
 
   @override
   void initState() {
     super.initState();
+    _waiting = widget.queued;
     _start();
   }
 
@@ -118,6 +130,19 @@ class LiveVideoState extends State<LiveVideo> {
 
   Future<void> _start() async {
     _stallTimer?.cancel();
+    _releaseTicket();
+    if (widget.queued) {
+      final ticket = _ticket = StreamQueue.instance.request();
+      // initState sets _waiting itself; setState is only for restarts.
+      if (!_waiting) setState(() => _waiting = true);
+      await ticket.ready;
+      // Superseded by a restart, or the view went away while waiting.
+      if (_disposed || !identical(_ticket, ticket)) {
+        ticket.release();
+        return;
+      }
+      setState(() => _waiting = false);
+    }
     // If no frame arrives in time the relay is half-open; start over.
     _stallTimer = Timer(const Duration(seconds: 35), () {
       if (_state != LiveState.playing) _onFailure('The camera did not send video in time');
@@ -125,16 +150,24 @@ class LiveVideoState extends State<LiveVideo> {
     if (!_disposed) setState(() => _session = ++_sessions);
   }
 
+  void _releaseTicket() {
+    _ticket?.release();
+    _ticket = null;
+  }
+
   void _onEvent(Map<String, dynamic> event) {
     if (_disposed) return;
     switch (event['state']) {
       case 'firstFrame':
+        _releaseTicket();
         _failures = 0;
         _stallTimer?.cancel();
         _setState(LiveState.playing);
       case 'size':
         final w = (event['width'] as num).toDouble(), h = (event['height'] as num).toDouble();
         if (w > 0 && h > 0 && mounted) setState(() => _aspect = w / h);
+      case 'snapshot':
+        Snapshots.instance.updated(widget.camera.deviceId);
       case 'error':
         final relayError = widget.app.relay.lastErrors[widget.camera.deviceId];
         _onFailure(relayError ?? '${event['message'] ?? 'Stream interrupted'}');
@@ -144,6 +177,7 @@ class LiveVideoState extends State<LiveVideo> {
   void _onFailure(String message) {
     if (_disposed) return;
     _stallTimer?.cancel();
+    _releaseTicket();
     _releaseTexture();
     _failures++;
     if (_failures > 3) {
@@ -178,6 +212,7 @@ class LiveVideoState extends State<LiveVideo> {
     _disposed = true;
     _retryTimer?.cancel();
     _stallTimer?.cancel();
+    _releaseTicket();
     super.dispose();
   }
 
@@ -196,6 +231,7 @@ class LiveVideoState extends State<LiveVideo> {
                 child: _NativeVideo(
                   key: ValueKey(session),
                   url: widget.app.streamUrl(widget.camera),
+                  snapshotPath: Snapshots.instance.pathFor(widget.camera.deviceId),
                   onEvent: _onEvent,
                 ),
               ),
@@ -210,52 +246,112 @@ class LiveVideoState extends State<LiveVideo> {
     final compact = widget.compact;
     final failed = _state == LiveState.failed;
     final text = switch (_state) {
-      LiveState.connecting => compact ? 'Connecting…' : 'Connecting to camera through Tapo cloud…',
-      LiveState.retrying => compact ? 'Reconnecting…' : 'Reconnecting…',
+      _ when _waiting => compact ? 'Waiting' : 'Waiting for other cameras to load…',
+      LiveState.connecting => compact ? 'Connecting' : 'Connecting to camera through Tapo cloud…',
+      LiveState.retrying => 'Reconnecting…',
       LiveState.failed => compact ? 'Unavailable' : 'Could not load the live view',
       LiveState.playing => '',
     };
-    return Container(
-      color: TopoColors.media.withValues(alpha: 0.85),
-      alignment: Alignment.center,
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (failed)
-            Icon(Icons.videocam_off_rounded, color: Color(0xFFC9D3DC), size: compact ? 26 : 48)
-          else
-            SizedBox(
-              width: compact ? 22 : 36,
-              height: compact ? 22 : 36,
-              child: const CircularProgressIndicator(strokeWidth: 3, color: TopoColors.onMedia),
-            ),
-          SizedBox(height: compact ? 8 : 16),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: TopoColors.onMedia,
-              fontSize: compact ? 16 : 22,
-              fontWeight: FontWeight.w600,
+    const soft = Color(0xFFC9D3DC);
+    final status = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (failed)
+          Icon(Icons.videocam_off_rounded, color: soft, size: compact ? 26 : 48)
+        else
+          SizedBox(
+            width: compact ? 22 : 36,
+            height: compact ? 22 : 36,
+            child: const CircularProgressIndicator(strokeWidth: 3, color: TopoColors.onMedia),
+          ),
+        SizedBox(height: compact ? 8 : 16),
+        Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: TopoColors.onMedia, fontSize: compact ? 16 : 22, fontWeight: FontWeight.w600),
+        ),
+        if (!compact && _error != null && _state != LiveState.connecting) ...[
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Text(
+              _error!,
+              textAlign: TextAlign.center,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: soft, fontSize: 16),
             ),
           ),
-          if (!compact && _error != null && _state != LiveState.connecting) ...[
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xFFC9D3DC), fontSize: 16),
+        ],
+      ],
+    );
+    final taken = snapshotTime(widget.camera.deviceId);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(
+          color: TopoColors.media,
+          child: SnapshotView(
+            deviceId: widget.camera.deviceId,
+            fit: compact ? BoxFit.cover : BoxFit.contain,
+            fallback: const SizedBox.expand(),
+          ),
+        ),
+        if (compact && taken != null)
+          // The last frame stays clear; a small chip says what's happening.
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: TopoColors.media.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(TopoRadius.sm),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (failed)
+                    const Icon(Icons.videocam_off_rounded, size: 14, color: soft)
+                  else
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: TopoColors.onMedia),
+                    ),
+                  const SizedBox(width: 6),
+                  Text(
+                    failed ? 'Unavailable · $taken' : text,
+                    style: const TextStyle(color: TopoColors.onMedia, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                ],
               ),
             ),
-          ],
-        ],
-      ),
+          )
+        else
+          Container(
+            color: TopoColors.media.withValues(alpha: taken != null ? 0.55 : 0.85),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.all(12),
+            child: taken == null
+                ? status
+                : Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+                    decoration: BoxDecoration(
+                      color: TopoColors.media.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(TopoRadius.lg),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        status,
+                        const SizedBox(height: 8),
+                        Text('Showing the last picture from $taken', style: const TextStyle(color: soft, fontSize: 15)),
+                      ],
+                    ),
+                  ),
+          ),
+      ],
     );
   }
 }
-

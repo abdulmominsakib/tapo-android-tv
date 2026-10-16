@@ -1,6 +1,7 @@
 package io.github.topo.topo_tv
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -24,6 +25,8 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
+import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * Native live video view: ExoPlayer rendering into an Android TextureView,
@@ -37,17 +40,23 @@ import io.flutter.plugin.platform.PlatformViewFactory
 class LiveVideoViewFactory(private val channel: MethodChannel) :
     PlatformViewFactory(StandardMessageCodec.INSTANCE) {
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        val url = (args as? Map<*, *>)?.get("url") as? String
+        val params = args as? Map<*, *>
+        val url = params?.get("url") as? String
             ?: throw IllegalArgumentException("url is required")
-        return LiveVideoView(context, url) { event ->
+        val snapshot = (params["snapshot"] as? String)?.let(::File)
+        return LiveVideoView(context, url, snapshot) { event ->
             channel.invokeMethod("event", event + ("id" to viewId))
         }
     }
 }
 
+/** Writes snapshots off the main thread, one at a time. */
+private val snapshotWriter = Executors.newSingleThreadExecutor()
+
 private class LiveVideoView(
     context: Context,
     url: String,
+    private val snapshotFile: File?,
     private val emit: (Map<String, Any?>) -> Unit,
 ) : PlatformView {
     private val handler = Handler(Looper.getMainLooper())
@@ -58,6 +67,32 @@ private class LiveVideoView(
     }
     private val player: ExoPlayer
     private var released = false
+
+    /**
+     * Saves a small JPEG of the current frame so the app can show the last
+     * picture instantly next time, while the stream is still connecting.
+     */
+    private val snapshotTask: Runnable = object : Runnable {
+        override fun run() {
+            if (released) return
+            val file = snapshotFile
+            val bitmap = if (file != null && textureView.isAvailable) textureView.getBitmap(480, 270) else null
+            if (file != null && bitmap != null) {
+                snapshotWriter.execute {
+                    try {
+                        file.parentFile?.mkdirs()
+                        val tmp = File(file.path + ".tmp")
+                        tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+                        if (tmp.renameTo(file)) handler.post { if (!released) emit(mapOf("state" to "snapshot")) }
+                    } catch (_: Exception) {
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
+            handler.postDelayed(this, 20_000)
+        }
+    }
     private var speedUp = false
 
     /**
@@ -126,6 +161,8 @@ private class LiveVideoView(
 
             override fun onRenderedFirstFrame() {
                 emit(mapOf("state" to "firstFrame"))
+                handler.removeCallbacks(snapshotTask)
+                handler.postDelayed(snapshotTask, 1500)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -164,6 +201,7 @@ private class LiveVideoView(
         if (released) return
         released = true
         handler.removeCallbacks(latencyWatch)
+        handler.removeCallbacks(snapshotTask)
         player.release()
     }
 }

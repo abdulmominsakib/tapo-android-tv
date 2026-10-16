@@ -52,7 +52,10 @@ remote from the ground up.
 ## Features
 
 **Live video**
-- Live previews of every camera on the home screen
+- Live previews of every camera on the home screen, started one at a time so
+  slower TVs stay smooth
+- The last captured picture of each camera appears instantly while its
+  stream connects
 - Full-screen live view with about 1 second of delay, reconnecting on its own
   if the stream drops
 - Switch cameras with CH+/CH−, the number keys or on-screen buttons
@@ -62,6 +65,8 @@ remote from the ground up.
 - A built-in **All cameras** grid that always shows every camera
 - Create, edit, duplicate and delete your own grids, saved on the TV
 - Switch between grids with CH+/CH− or the grid bar
+- Pin a **favourite grid** to the top of the home page and open it with one
+  press
 
 **Camera control**
 - Pan and tilt with the arrow keys; hold an arrow to keep moving
@@ -99,11 +104,13 @@ remote from the ground up.
 | | Back | Close a dialog or controls, then go back |
 | | Menu / Info | Open the remote guide |
 | **Text boxes** | OK | Open the TV keyboard |
-| **Cameras** | OK | Watch live |
+| **Cameras** | OK on the favourite grid | Watch the grid |
+| | Hold OK on the favourite grid | Choose another grid or unpin it |
+| | OK on a camera | Watch live |
 | | Hold OK | Quick actions: privacy mode, reconnect |
 | | 1–9 | Open camera 1 to 9 |
 | **Multi-view** | OK | Watch the grid |
-| | Hold OK | Edit, duplicate or delete the grid |
+| | Hold OK | Pin to home, edit, duplicate or delete |
 | **Watching a grid** | OK on a tile | That camera full screen |
 | | Hold OK on a tile | Put a different camera in the tile |
 | | Up from the top row | Grid bar: other grids, edit or save a copy |

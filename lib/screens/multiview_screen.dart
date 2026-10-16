@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../main.dart';
 import '../player/live_player.dart';
+import '../player/stream_queue.dart';
 import '../state/app_state.dart';
 import '../state/grids.dart';
 import '../ui/guide.dart';
@@ -95,6 +96,15 @@ class MultiviewPanel extends StatelessWidget {
             onSelect: () => Navigator.pop(context, 'open'),
           ),
           const SizedBox(height: TopoSpace.md),
+          TvTile(
+            title: app.favoriteGridId == grid.id ? 'Remove from home' : 'Pin to home',
+            subtitle: app.favoriteGridId == grid.id
+                ? 'This is your favourite grid on the home page'
+                : 'Show this grid at the top of the home page',
+            icon: app.favoriteGridId == grid.id ? Icons.star_outline_rounded : Icons.star_rounded,
+            onSelect: () => Navigator.pop(context, 'favorite'),
+          ),
+          const SizedBox(height: TopoSpace.md),
           if (grid.isAuto)
             TvTile(
               title: 'Save a copy to customise',
@@ -121,6 +131,10 @@ class MultiviewPanel extends StatelessWidget {
     switch (action) {
       case 'open':
         await openGrid(context, grid.id);
+      case 'favorite':
+        final pin = app.favoriteGridId != grid.id;
+        await app.setFavoriteGrid(pin ? grid.id : null);
+        if (context.mounted) showToast(context, pin ? 'Pinned to home' : 'Removed from home', icon: Icons.star_rounded);
       case 'edit':
         await editGrid(context, grid);
       case 'copy':
@@ -197,6 +211,10 @@ class MultiviewPanel extends StatelessWidget {
                           Expanded(
                             child: Text(grid.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TopoText.label),
                           ),
+                          if (grid.id == app.favoriteGridId) ...[
+                            const Icon(Icons.star_rounded, size: 20, color: TopoColors.primaryAction, semanticLabel: 'Pinned to home'),
+                            const SizedBox(width: 4),
+                          ],
                           if (last) ...[
                             const Icon(Icons.check_circle_rounded, size: 18, color: TopoColors.primaryPressed),
                             const SizedBox(width: 4),
@@ -218,10 +236,75 @@ class MultiviewPanel extends StatelessWidget {
         const SizedBox(height: TopoSpace.sm),
         HintBar([
           (const KeyCap('OK'), 'Watch grid'),
-          (const KeyCap('Hold OK'), 'Edit, duplicate or delete'),
+          (const KeyCap('Hold OK'), 'Pin to home, edit or delete'),
           (const KeyCap('CH ±'), 'Switch grid while watching'),
         ]),
       ],
+    );
+  }
+}
+
+/// A grid's layout filled with each camera's last captured picture. Used on
+/// the home page, where it costs nothing compared with live streams.
+class GridSnapshotPreview extends StatelessWidget {
+  const GridSnapshotPreview({super.key, required this.app, required this.grid});
+  final AppState app;
+  final GridPreset grid;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExcludeSemantics(
+      child: Container(
+        decoration: BoxDecoration(color: TopoColors.media, borderRadius: BorderRadius.circular(TopoRadius.sm)),
+        padding: const EdgeInsets.all(3),
+        child: TileLayout(
+          layout: grid.layout,
+          gap: 3,
+          builder: (i) {
+            final camera = app.cameraById(grid.slots[i]);
+            final empty = Container(color: const Color(0xFF1B2733));
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: camera == null
+                  ? empty
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (camera.privacy == true)
+                          Container(
+                            color: const Color(0xFF1B2733),
+                            child: const Icon(Icons.visibility_off_rounded, color: Color(0xFFC9D3DC), size: 16),
+                          )
+                        else
+                          SnapshotView(
+                            deviceId: camera.deviceId,
+                            fallback: Container(
+                              color: const Color(0xFF1B2733),
+                              child: const Icon(Icons.videocam_rounded, color: Color(0xFFC9D3DC), size: 16),
+                            ),
+                          ),
+                        Positioned(
+                          left: 2,
+                          bottom: 2,
+                          right: 2,
+                          child: Text(
+                            camera.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              shadows: [Shadow(color: Colors.black, blurRadius: 3)],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -241,7 +324,7 @@ class LayoutDiagram extends StatelessWidget {
         child: Center(
           child: AspectRatio(
             aspectRatio: 16 / 9,
-            child: _TileLayout(
+            child: TileLayout(
               layout: grid.layout,
               gap: 4,
               builder: (i) {
@@ -271,8 +354,8 @@ class LayoutDiagram extends StatelessWidget {
 }
 
 /// Positions one widget per tile of [layout] inside the available box.
-class _TileLayout extends StatelessWidget {
-  const _TileLayout({required this.layout, required this.builder, this.gap = 8});
+class TileLayout extends StatelessWidget {
+  const TileLayout({super.key, required this.layout, required this.builder, this.gap = 8});
   final GridLayout layout;
   final Widget Function(int index) builder;
   final double gap;
@@ -467,7 +550,7 @@ class _GridViewScreenState extends State<GridViewScreen> {
                   child: ExcludeFocus(
                     excluding: _barFocused,
                     child: FocusTraversalGroup(
-                      child: _TileLayout(
+                      child: TileLayout(
                         layout: grid.layout,
                         gap: 14,
                         builder: (i) {
@@ -478,7 +561,7 @@ class _GridViewScreenState extends State<GridViewScreen> {
                             camera: camera,
                             number: i + 1,
                             focusNode: i == 0 ? _firstTile : null,
-                            active: app.foreground && (ModalRoute.of(context)?.isCurrent ?? true),
+                            active: app.foreground && TickerMode.valuesOf(context).enabled,
                             onSelect: () => _openTile(grid, i),
                             onLongSelect: () => _changeTile(grid, i),
                           );
@@ -878,7 +961,7 @@ class _GridEditorScreenState extends State<GridEditorScreen> {
                       child: AspectRatio(
                         aspectRatio: 16 / 9,
                         child: FocusTraversalGroup(
-                          child: _TileLayout(
+                          child: TileLayout(
                             layout: _layout,
                             gap: 16,
                             builder: (i) {

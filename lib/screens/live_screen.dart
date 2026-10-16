@@ -266,6 +266,7 @@ class _LiveScreenState extends State<LiveScreen> {
                   key: ValueKey('live-${camera.deviceId}-$_reconnects'),
                   app: app,
                   camera: camera,
+                  queued: false,
                   onStateChanged: (s) => setState(() => _liveState = s),
                 ),
               // Directional feedback for pan & tilt.

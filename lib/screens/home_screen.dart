@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../main.dart';
 import '../player/live_player.dart';
+import '../player/stream_queue.dart';
 import '../state/app_state.dart';
 import '../ui/guide.dart';
 import '../ui/theme.dart';
@@ -102,9 +103,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    // Previews only run while this route is on top and the app is visible.
-    final isCurrent = ModalRoute.of(context)?.isCurrent ?? true;
-    final active = app.foreground && isCurrent;
+    // Previews run while this page is visible: a full page on top (live
+    // view, a grid) turns tickers off for it, a dialog does not.
+    final active = app.foreground && TickerMode.valuesOf(context).enabled;
     return Scaffold(
       body: Padding(
         padding: tvSafePadding.copyWith(bottom: 18),
@@ -299,31 +300,42 @@ class _CamerasPanelState extends State<CamerasPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: GridView.builder(
-              scrollCacheExtent: const ScrollCacheExtent.pixels(4000),
-              // Room for the focus outline and scale; never clip focus.
-              padding: const EdgeInsets.all(14),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: TopoSpace.cardGap,
-                crossAxisSpacing: TopoSpace.cardGap,
-                childAspectRatio: 1.25,
-              ),
-              itemCount: cameras.length,
-              itemBuilder: (context, i) {
-                final camera = cameras[i];
-                return _CameraCard(
-                  key: ValueKey(camera.deviceId),
-                  app: app,
-                  camera: camera,
-                  number: i + 1,
-                  autofocus: i == 0,
-                  showVideo: showVideo,
-                  videoKey: _videoKeys.putIfAbsent(camera.deviceId, GlobalKey<LiveVideoState>.new),
-                  onSelect: () => openLive(context, i),
-                  onLongSelect: () => _quickActions(camera, i),
-                );
-              },
+            child: CustomScrollView(
+              // Build only what is on (or next to) the screen: cards scrolled
+              // away stop streaming and show their last picture instead.
+              scrollCacheExtent: const ScrollCacheExtent.pixels(300),
+              slivers: [
+                SliverPadding(
+                  // Room for the focus outline and scale; never clip focus.
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, TopoSpace.x2),
+                  sliver: SliverToBoxAdapter(child: FavoriteGridCard(app: app, autofocus: true)),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                  sliver: SliverGrid.builder(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: TopoSpace.cardGap,
+                      crossAxisSpacing: TopoSpace.cardGap,
+                      childAspectRatio: 1.25,
+                    ),
+                    itemCount: cameras.length,
+                    itemBuilder: (context, i) {
+                      final camera = cameras[i];
+                      return _CameraCard(
+                        key: ValueKey(camera.deviceId),
+                        app: app,
+                        camera: camera,
+                        number: i + 1,
+                        showVideo: showVideo,
+                        videoKey: _videoKeys.putIfAbsent(camera.deviceId, GlobalKey<LiveVideoState>.new),
+                        onSelect: () => openLive(context, i),
+                        onLongSelect: () => _quickActions(camera, i),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: TopoSpace.sm),
@@ -382,7 +394,10 @@ class _Empty extends StatelessWidget {
 /// Camera status as text plus icon (never color alone).
 (String, IconData, Color) cameraStatus(Camera camera, LiveState? live, {required bool previews}) {
   if (camera.privacy == true) return ('Privacy on', Icons.visibility_off_rounded, TopoColors.muted);
-  if (!previews) return ('Ready', Icons.videocam_rounded, TopoColors.muted);
+  if (!previews) {
+    final taken = snapshotTime(camera.deviceId);
+    return (taken == null ? 'Ready' : 'Last seen $taken', Icons.photo_camera_rounded, TopoColors.muted);
+  }
   return switch (live) {
     LiveState.playing => ('Live', Icons.circle, TopoColors.success),
     LiveState.failed => ('Unavailable', Icons.error_outline_rounded, TopoColors.error),
@@ -401,7 +416,6 @@ class _CameraCard extends StatefulWidget {
     required this.videoKey,
     required this.onSelect,
     required this.onLongSelect,
-    this.autofocus = false,
   });
 
   final AppState app;
@@ -411,7 +425,6 @@ class _CameraCard extends StatefulWidget {
   final GlobalKey<LiveVideoState> videoKey;
   final VoidCallback onSelect;
   final VoidCallback onLongSelect;
-  final bool autofocus;
 
   @override
   State<_CameraCard> createState() => _CameraCardState();
@@ -429,7 +442,6 @@ class _CameraCardState extends State<_CameraCard> {
       button: true,
       label: '${widget.number}. ${camera.name}, $status',
       child: TvCard(
-        autofocus: widget.autofocus,
         onSelect: widget.onSelect,
         onLongSelect: widget.onLongSelect,
         padding: const EdgeInsets.all(TopoSpace.md),
@@ -453,7 +465,10 @@ class _CameraCardState extends State<_CameraCard> {
                         onStateChanged: (s) => setState(() => _live = s),
                       )
                     else
-                      const _Placeholder(icon: Icons.videocam_rounded, text: 'Press OK to watch'),
+                      SnapshotView(
+                        deviceId: camera.deviceId,
+                        fallback: const _Placeholder(icon: Icons.videocam_rounded, text: 'Press OK to watch'),
+                      ),
                     Positioned(
                       left: TopoSpace.sm,
                       top: TopoSpace.sm,
@@ -513,4 +528,125 @@ class _Placeholder extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// Picks the grid pinned to the home page. Returns the chosen id, '' to
+/// unpin, or null when cancelled.
+Future<void> chooseFavoriteGrid(BuildContext context) async {
+  final app = AppScope.read(context);
+  final current = app.favoriteGridId;
+  final picked = await showTvDialog<String>(
+    context,
+    (context) => TvDialog(
+      title: 'Favourite grid',
+      message: 'Pinned at the top of the home page for one-press access.',
+      children: [
+        for (final grid in app.grids) ...[
+          TvTile(
+            title: grid.name,
+            subtitle: '${grid.cameraCount} cameras · ${grid.layout.label}',
+            icon: Icons.grid_view_rounded,
+            selected: grid.id == current,
+            autofocus: grid.id == current || (current == null && grid.isAuto),
+            onSelect: () => Navigator.pop(context, grid.id),
+          ),
+          const SizedBox(height: TopoSpace.md),
+        ],
+        if (current != null)
+          TvTile(
+            title: 'Remove from home',
+            icon: Icons.star_outline_rounded,
+            danger: true,
+            onSelect: () => Navigator.pop(context, ''),
+          ),
+      ],
+    ),
+  );
+  if (picked == null) return;
+  await app.setFavoriteGrid(picked.isEmpty ? null : picked);
+  if (context.mounted) {
+    showToast(context, picked.isEmpty ? 'Removed from home' : 'Pinned to home', icon: Icons.star_rounded);
+  }
+}
+
+/// Home-page card for the favourite grid: last pictures of its cameras
+/// (no live streams, so the home page stays light), OK opens the grid.
+class FavoriteGridCard extends StatelessWidget {
+  const FavoriteGridCard({super.key, required this.app, this.autofocus = false});
+  final AppState app;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final grid = app.favoriteGrid;
+    if (grid == null) {
+      return Semantics(
+        button: true,
+        label: 'Add a favourite grid',
+        child: TvCard(
+          autofocus: autofocus,
+          onSelect: () => chooseFavoriteGrid(context),
+          padding: const EdgeInsets.symmetric(horizontal: TopoSpace.xl, vertical: TopoSpace.lg),
+          child: (focused) => const Row(
+            children: [
+              Icon(Icons.star_outline_rounded, color: TopoColors.primaryAction, size: 32),
+              SizedBox(width: TopoSpace.lg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Add a favourite grid', style: TopoText.label),
+                    Text('Pin a multi-view grid here to open it with one press.', style: TopoText.caption),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: TopoColors.muted),
+            ],
+          ),
+        ),
+      );
+    }
+    return Semantics(
+      button: true,
+      label: 'Favourite grid ${grid.name}, ${grid.cameraCount} cameras. Press OK to watch.',
+      child: TvCard(
+        autofocus: autofocus,
+        padding: const EdgeInsets.all(TopoSpace.md),
+        onSelect: () => openGrid(context, grid.id),
+        onLongSelect: () => chooseFavoriteGrid(context),
+        child: (focused) => Row(
+          children: [
+            SizedBox(
+              width: 300,
+              child: AspectRatio(aspectRatio: 16 / 9, child: GridSnapshotPreview(app: app, grid: grid)),
+            ),
+            const SizedBox(width: TopoSpace.x2),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.star_rounded, color: TopoColors.primaryAction, size: 20),
+                      SizedBox(width: 6),
+                      Text('Favourite grid', style: TextStyle(color: TopoColors.primaryPressed, fontSize: 16, fontWeight: FontWeight.w500)),
+                    ],
+                  ),
+                  const SizedBox(height: TopoSpace.xs),
+                  Text(grid.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TopoText.headline),
+                  Text('${grid.cameraCount} cameras · ${grid.layout.label}', style: TopoText.caption),
+                  const SizedBox(height: TopoSpace.md),
+                  HintBar([
+                    (const KeyCap('OK'), 'Watch grid'),
+                    (const KeyCap('Hold OK'), 'Change'),
+                  ]),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

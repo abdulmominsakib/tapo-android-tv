@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/relay_bridge.dart';
 import '../api/tapo_cloud.dart';
+import '../player/stream_queue.dart';
 import 'grids.dart';
 
 enum AuthStage { starting, signedOut, mfa, signedIn }
@@ -59,6 +60,7 @@ class AppState extends ChangeNotifier {
   static const _kAccount = 'account_hint';
   static const _kGrids = 'grids';
   static const _kActiveGrid = 'active_grid';
+  static const _kFavoriteGrid = 'favorite_grid';
 
   late SharedPreferences _prefs;
   late SecurityContext _context;
@@ -85,6 +87,9 @@ class AppState extends ChangeNotifier {
   List<GridPreset> savedGrids = [];
   String activeGridId = GridPreset.allCamerasId;
 
+  /// Grid pinned to the top of the home page, if any.
+  String? favoriteGridId;
+
   TapoCloud? get client => _client;
 
   Future<void> init() async {
@@ -97,6 +102,7 @@ class AppState extends ChangeNotifier {
       guideSeen = _prefs.getBool(_kGuideSeen) ?? false;
       accountHint = _prefs.getString(_kAccount) ?? '';
       _loadGrids();
+      await Snapshots.instance.init();
       await relay.start();
       _bootstrapped = true;
     }
@@ -404,6 +410,7 @@ class AppState extends ChangeNotifier {
       savedGrids = [];
     }
     activeGridId = _prefs.getString(_kActiveGrid) ?? GridPreset.allCamerasId;
+    favoriteGridId = _prefs.getString(_kFavoriteGrid);
   }
 
   Future<void> _saveGrids() =>
@@ -435,6 +442,26 @@ class AppState extends ChangeNotifier {
 
   int cameraIndex(String deviceId) => cameras.indexWhere((c) => c.deviceId == deviceId);
 
+  GridPreset? get favoriteGrid {
+    final id = favoriteGridId;
+    if (id == null) return null;
+    for (final g in grids) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
+
+  /// Pins [id] to the home page, or unpins with null.
+  Future<void> setFavoriteGrid(String? id) async {
+    favoriteGridId = id;
+    if (id == null) {
+      await _prefs.remove(_kFavoriteGrid);
+    } else {
+      await _prefs.setString(_kFavoriteGrid, id);
+    }
+    notifyListeners();
+  }
+
   Future<void> setActiveGrid(String id) async {
     activeGridId = id;
     await _prefs.setString(_kActiveGrid, id);
@@ -464,6 +491,10 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteGrid(String id) async {
     savedGrids.removeWhere((g) => g.id == id);
+    if (favoriteGridId == id) {
+      favoriteGridId = null;
+      await _prefs.remove(_kFavoriteGrid);
+    }
     if (activeGridId == id) {
       activeGridId = GridPreset.allCamerasId;
       await _prefs.setString(_kActiveGrid, activeGridId);

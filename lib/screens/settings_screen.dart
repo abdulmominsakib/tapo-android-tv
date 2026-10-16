@@ -100,7 +100,7 @@ class SettingsPanel extends StatelessWidget {
               children: [
                 Image.asset('assets/topo.png', width: 56, height: 56, semanticLabel: 'Topo'),
                 const SizedBox(height: TopoSpace.md),
-                const Text('Topo TV 1.1.0', style: TopoText.label),
+                const Text('Topo TV 1.2.0', style: TopoText.label),
                 const SizedBox(height: TopoSpace.xs),
                 const Text(
                   'Android TV port of github.com/filirnd/topo. MIT licence. Not affiliated with TP-Link.',
